@@ -34,9 +34,6 @@ use POSIX qw(:signal_h setsid);
 use strict;
 use warnings;
 
-# for backwards compatability...
-*becomeDaemon = \&init;
-
 sub new {
     my ($class, $pidpath) = @_;
 
@@ -51,13 +48,13 @@ sub new {
 sub init {
     my $self = shift;
 
-    return 0 if (! $self->_checkPidFile());
-    return 0 if (! $self->_fork());
+    return if (! $self->_checkPidFile());
+    return if (! $self->_fork());
     return $self;
 }
 
 sub errstr {
-    return ($_[0]->_error || undef);
+    return $_[0]->_error ? $_[0]->_error : undef;
 }
 
 sub cleanup {
@@ -65,11 +62,7 @@ sub cleanup {
 
     if ($self->_PID() && ($self->_PID() == $$)) {
         if (-e $self->_pidFile()) {
-            unlink($self->_pidFile()) || do {
-                $self->_error(
-                    "Could not unlink " . $self->_pidFile() . ' ' . $! );
-                return 0;
-            };
+            unlink($self->_pidFile()) || return $self->_error("Could not unlink " . $self->_pidFile() . ' ' . $!);
             return 1;
         }
     }
@@ -80,7 +73,7 @@ sub _error {
 
     if (defined($msg)) {
         $self->{err} = $msg;
-        return $self;
+        return;
     } else {
         return $self->{err};
     }
@@ -113,32 +106,22 @@ sub _checkPidFile {
 
     if (-e $self->_pidFile()) {
         # file exists so we might already be running
-        my $fh = IO::File->new($self->_pidFile()) || do {
-            $self->_error("Could not open " . $self->_pidFile() . " $!");
-            return 0;
-        };
+        my $fh = IO::File->new($self->_pidFile()) || return $self->_error("Could not open " . $self->_pidFile() . " $!");
         my $pid = <$fh>;
         $fh->close();
         if ($pid =~ /^(\d+)$/) {
             my $PID = $1;
             # see if the process is actually running
             if ($self->_processIsRunning($PID)) {
-                $self->_error("Daemon already running with pid $PID");
-                return 0;
+                return $self->_error("Daemon already running with pid $PID");
             } else {
                 # that process does not exist in the process table, perhaps
                 # previous process died without removing the PID file
-                unlink($self->_pidFile()) || do {
-                    $self->_error( "Could not remove old PID file "
-                          . $self->_pidFile()
-                          . " $!" );
-                    return 0;
-                };
+                unlink($self->_pidFile()) || return $self->_error("Could not unlink " . $self->_pidFile() . " $!");
                 return 1;
             }
         } else {
-            $self->_error("Invalid PID $pid found in " . $self->_pidFile());
-            return 0;
+            return $self->_error("Invalid PID $pid found in " . $self->_pidFile());
         }
     } else {
         return 1;
@@ -156,20 +139,19 @@ sub _processIsRunning {
         return 1;
     } elsif ($! == ESRCH) {
         # no such process exists in the process table
-        return undef;
+        return;
     }
 }
 
 sub _fork {
     my $self = shift;
 
-    return 0 if (! $self->_createPidDir());
+    return if (! $self->_createPidDir());
     my $signals = POSIX::SigSet->new(SIGTERM, SIGHUP);
     sigprocmask(SIG_BLOCK, $signals);
     my $child;
     unless (defined($child = fork())) {
-        $self->_error("Could not fork - $!");
-        return 0;
+        return $self->_error("Could not fork - $!");
     }
     exit 0 if $child; # wave goodbye to your parent, buh-bye...
     # now disassociate ourselves from the terminal
@@ -187,8 +169,7 @@ sub _createPidDir {
     return 1 if (-d dirname($self->_pidFile()));
     eval { mkpath(dirname($self->_pidFile())) };
     if ($@) {
-        $self->_error("Could not create " . dirname($self->_pidFile()) . $@);
-        return 0;
+        return $self->_error("Could not create " . dirname($self->_pidFile()) . $@);
     }
     return 1;
 }
@@ -197,10 +178,7 @@ sub _writePidFile {
     my $self = shift;
 
     my $pidFile = $self->_pidFile();
-    my $fh = IO::File->new(">$pidFile") || do {
-        $self->_error("Could not create $pidFile - $!");
-        return 0;
-    };
+    my $fh = IO::File->new(">$pidFile") || return $self->_error("Could not create $pidFile - $!");
     print $fh $$, "\n";
     $fh->close();
     $self->_PID($$);
